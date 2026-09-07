@@ -55,40 +55,31 @@ export async function fetchProductDetail(productId, fieldKeys) {
 }
 
 // Fetches every product in a category along with ALL of their submissions,
-// grouped by field_key, in the exact shape the UI's analyzeField() function
-// already expects: { [fieldKey]: [ {value, sourceLabel, contributor, sourceType}, ... ] }
-// This keeps the status-derivation logic identical whether it's running on
-// the prototype's hardcoded sample data or on real Supabase data.
+// via the get_catalog() database function — NOT by querying tables directly.
+// Direct table access is revoked (see migration-3-lock-down-reads.sql), so
+// this RPC call is the only way to read this data, same principle as writes
+// going exclusively through submit_field_value().
 export async function fetchCatalog(category) {
-  const { data: products, error: pErr } = await supabase
-    .from("products")
-    .select("id, category, type, model, manufacturers(name)")
-    .eq("category", category);
-  if (pErr) throw pErr;
-  if (!products.length) return [];
+  const { data, error } = await supabase.rpc("get_catalog", { p_category: category });
+  if (error) throw error;
+  if (!data) return [];
 
-  const productIds = products.map((p) => p.id);
-  const { data: submissions, error: sErr } = await supabase
-    .from("submissions")
-    .select("product_id, field_key, value, source_label, source_url, source_type, profiles(username)")
-    .in("product_id", productIds);
-  if (sErr) throw sErr;
-
-  return products.map((p) => {
-    const fields = {};
-    submissions
-      .filter((s) => s.product_id === p.id)
-      .forEach((s) => {
-        const entry = {
-          value: isNaN(Number(s.value)) ? s.value : Number(s.value),
-          sourceLabel: s.source_label,
-          contributor: s.profiles?.username ?? "unknown",
-          sourceType: s.source_type,
-        };
-        (fields[s.field_key] = fields[s.field_key] || []).push(entry);
-      });
-    return { id: p.id, mfg: p.manufacturers?.name, model: p.model, type: p.type, fields };
+  const byProduct = {};
+  data.forEach((row) => {
+    if (!byProduct[row.product_id]) {
+      byProduct[row.product_id] = { id: row.product_id, mfg: row.mfg, model: row.model, type: row.type, fields: {} };
+    }
+    if (row.field_key) {
+      const entry = {
+        value: isNaN(Number(row.value)) ? row.value : Number(row.value),
+        sourceLabel: row.source_label,
+        contributor: row.contributor ?? "unknown",
+        sourceType: row.source_type,
+      };
+      (byProduct[row.product_id].fields[row.field_key] = byProduct[row.product_id].fields[row.field_key] || []).push(entry);
+    }
   });
+  return Object.values(byProduct);
 }
 
 // ---------------------------------------------------------------------------
