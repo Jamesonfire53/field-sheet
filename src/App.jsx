@@ -273,7 +273,7 @@ function AuthPanel({ profile, stats, onAuthChange }) {
     } else if (!document.getElementById("turnstile-script")) {
       const script = document.createElement("script");
       script.id = "turnstile-script";
-      script.src = "https://challenge.cloudflare.com/turnstile/v0/api.js";
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
       script.async = true;
       script.defer = true;
       script.onload = renderWidget;
