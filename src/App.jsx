@@ -248,6 +248,7 @@ function AuthPanel({ profile, stats, onAuthChange }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [confirmNotice, setConfirmNotice] = useState(false);
+  const [tosAgreed, setTosAgreed] = useState(false);
 
   const inputStyle = { ...bodyFont, background: C.bg, border: `1px solid ${C.line}`, color: C.text, padding: "6px 8px", fontSize: "0.8rem", outline: "none", width: "100%" };
 
@@ -257,6 +258,7 @@ function AuthPanel({ profile, stats, onAuthChange }) {
     try {
       if (authMode === "signup") {
         if (!username.trim()) throw new Error("Pick a username");
+        if (!tosAgreed) throw new Error("You must agree to the Terms of Service and Privacy Policy");
         await signUp(email.trim(), password, username.trim());
         setConfirmNotice(true);
       } else {
@@ -311,12 +313,22 @@ function AuthPanel({ profile, stats, onAuthChange }) {
           ) : (
             <>
               {authMode === "signup" && (
-                <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" style={inputStyle} />
+                <>
+                  <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" style={inputStyle} />
+                  <label className="flex items-start gap-1.5 text-xs" style={{ color: C.textDim }}>
+                    <input type="checkbox" checked={tosAgreed} onChange={(e) => setTosAgreed(e.target.checked)} style={{ marginTop: "2px" }} />
+                    <span>
+                      I agree to the <a href="/terms.html" target="_blank" rel="noopener" style={{ color: C.olive, textDecoration: "underline" }}>Terms of Service</a> and{" "}
+                      <a href="/privacy.html" target="_blank" rel="noopener" style={{ color: C.olive, textDecoration: "underline" }}>Privacy Policy</a>
+                    </span>
+                  </label>
+                </>
               )}
               <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" style={inputStyle} />
               <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" style={inputStyle} />
               {error && <div className="text-xs" style={{ color: C.rust }}>{error}</div>}
-              <button onClick={handleSubmit} disabled={busy} className="fs-btn py-1.5 text-xs font-medium" style={{ background: C.olive, color: C.bg, ...headFont }}>
+              <button onClick={handleSubmit} disabled={busy || (authMode === "signup" && !tosAgreed)} className="fs-btn py-1.5 text-xs font-medium"
+                style={{ background: C.olive, color: C.bg, ...headFont, opacity: (authMode === "signup" && !tosAgreed) ? 0.5 : 1 }}>
                 {busy ? "…" : authMode === "signup" ? "Create account" : "Sign in"}
               </button>
             </>
@@ -328,7 +340,59 @@ function AuthPanel({ profile, stats, onAuthChange }) {
 }
 
 // ---------------------------------------------------------------------------
+// Age gate — shown once per browser (stored in localStorage), not per session.
+// A simple attestation gate, same pattern used by most firearms retail sites.
+// ---------------------------------------------------------------------------
+const AGE_GATE_KEY = "fieldsheet_age_confirmed";
+
+function AgeGate({ onConfirm }) {
+  const [declined, setDeclined] = useState(false);
+
+  if (declined) {
+    return (
+      <div style={{ ...bodyFont, background: C.bg, color: C.text, minHeight: "100vh" }} className="w-full flex items-center justify-center px-6">
+        <div className="text-center max-w-sm">
+          <Crosshair size={28} color={C.rust} strokeWidth={1.5} className="mx-auto mb-4" />
+          <p style={{ ...headFont }} className="text-lg mb-2">Access restricted</p>
+          <p style={{ color: C.textDim }} className="text-sm">Field Sheet is only available to visitors who are 18 years of age or older.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...bodyFont, background: C.bg, color: C.text, minHeight: "100vh" }} className="w-full flex items-center justify-center px-6">
+      <div className="text-center max-w-sm">
+        <Crosshair size={28} color={C.olive} strokeWidth={1.5} className="mx-auto mb-4" />
+        <p style={{ ...headFont }} className="text-xl mb-2">Age confirmation required</p>
+        <p style={{ color: C.textDim }} className="text-sm mb-6">Field Sheet contains firearm and optic specification data. You must be 18 or older to enter.</p>
+        <div className="flex gap-3 justify-center">
+          <button
+            onClick={() => { localStorage.setItem(AGE_GATE_KEY, "true"); onConfirm(); }}
+            className="fs-btn px-5 py-2 text-sm font-medium"
+            style={{ background: C.olive, color: C.bg, ...headFont }}
+          >
+            Yes, I'm 18 or older
+          </button>
+          <button
+            onClick={() => setDeclined(true)}
+            className="fs-btn px-5 py-2 text-sm"
+            style={{ background: "transparent", border: `1px solid ${C.line}`, color: C.textDim, ...headFont }}
+          >
+            No
+          </button>
+        </div>
+        <p style={{ color: C.textFaint }} className="text-xs mt-6">
+          By continuing you also agree to our <a href="/terms.html" target="_blank" rel="noopener" style={{ color: C.olive, textDecoration: "underline" }}>Terms of Service</a> and <a href="/privacy.html" target="_blank" rel="noopener" style={{ color: C.olive, textDecoration: "underline" }}>Privacy Policy</a>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 export default function FieldSheet() {
+  const [ageConfirmed, setAgeConfirmed] = useState(() => localStorage.getItem(AGE_GATE_KEY) === "true");
   const [mode, setMode] = useState("catalog"); // 'catalog' | 'moderator'
   const [profile, setProfile] = useState(null);
   const [stats, setStats] = useState(null);
@@ -489,6 +553,10 @@ export default function FieldSheet() {
     if (vals.length < 2) return null;
     return fieldDef.lowerBetter ? Math.min(...vals) : Math.max(...vals);
   };
+
+  if (!ageConfirmed) {
+    return <AgeGate onConfirm={() => setAgeConfirmed(true)} />;
+  }
 
   return (
     <div style={{ ...bodyFont, background: C.bg, color: C.text, minHeight: "100%" }} className="w-full">
@@ -852,6 +920,10 @@ export default function FieldSheet() {
           </div>
         </>
       )}
+      <div className="px-5 sm:px-8 py-4 flex gap-4 text-xs" style={{ borderTop: `1px solid ${C.lineFaint}`, color: C.textFaint }}>
+        <a href="/terms.html" target="_blank" rel="noopener" style={{ color: C.textFaint }}>Terms of Service</a>
+        <a href="/privacy.html" target="_blank" rel="noopener" style={{ color: C.textFaint }}>Privacy Policy</a>
+      </div>
     </div>
   );
 }

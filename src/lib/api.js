@@ -141,9 +141,9 @@ export async function signOut() {
 export async function getCurrentProfile() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data, error } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+  const { data, error } = await supabase.rpc("get_my_profile");
   if (error) throw error;
-  return data;
+  return data?.[0] ?? null;
 }
 
 export async function fetchAcceptanceStats() {
