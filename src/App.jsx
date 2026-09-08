@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Search, X, ArrowUpDown, Crosshair, Scale, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, CircleDashed, ExternalLink, Flag, Gavel, Plus } from "lucide-react";
 import { fetchCatalog, submitFieldValue, signUp, signIn, signOut, getCurrentProfile, fetchAcceptanceStats } from "./lib/api";
 import { supabase } from "./lib/supabaseClient";
@@ -249,20 +249,61 @@ function AuthPanel({ profile, stats, onAuthChange }) {
   const [busy, setBusy] = useState(false);
   const [confirmNotice, setConfirmNotice] = useState(false);
   const [tosAgreed, setTosAgreed] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState(null);
+  const turnstileRef = useRef(null);
+  const widgetIdRef = useRef(null);
 
   const inputStyle = { ...bodyFont, background: C.bg, border: `1px solid ${C.line}`, color: C.text, padding: "6px 8px", fontSize: "0.8rem", outline: "none", width: "100%" };
 
+  // Load Cloudflare Turnstile's script once, then render the widget into
+  // turnstileRef whenever the form is open. Tokens are single-use, so the
+  // widget resets itself after every submit attempt (success or failure).
+  useEffect(() => {
+    if (!open) return;
+    function renderWidget() {
+      if (!turnstileRef.current || !window.turnstile || widgetIdRef.current) return;
+      widgetIdRef.current = window.turnstile.render(turnstileRef.current, {
+        sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+        callback: (token) => setCaptchaToken(token),
+        "expired-callback": () => setCaptchaToken(null),
+      });
+    }
+    if (window.turnstile) {
+      renderWidget();
+    } else if (!document.getElementById("turnstile-script")) {
+      const script = document.createElement("script");
+      script.id = "turnstile-script";
+      script.src = "https://challenge.cloudflare.com/turnstile/v0/api.js";
+      script.async = true;
+      script.defer = true;
+      script.onload = renderWidget;
+      document.head.appendChild(script);
+    }
+    return () => {
+      if (widgetIdRef.current && window.turnstile) {
+        window.turnstile.remove(widgetIdRef.current);
+        widgetIdRef.current = null;
+      }
+    };
+  }, [open, authMode]);
+
+  function resetCaptcha() {
+    setCaptchaToken(null);
+    if (widgetIdRef.current && window.turnstile) window.turnstile.reset(widgetIdRef.current);
+  }
+
   async function handleSubmit() {
     setError(null);
+    if (!captchaToken) { setError("Please complete the verification below"); return; }
     setBusy(true);
     try {
       if (authMode === "signup") {
         if (!username.trim()) throw new Error("Pick a username");
         if (!tosAgreed) throw new Error("You must agree to the Terms of Service and Privacy Policy");
-        await signUp(email.trim(), password, username.trim());
+        await signUp(email.trim(), password, username.trim(), captchaToken);
         setConfirmNotice(true);
       } else {
-        await signIn(email.trim(), password);
+        await signIn(email.trim(), password, captchaToken);
         setOpen(false);
         onAuthChange();
       }
@@ -270,6 +311,7 @@ function AuthPanel({ profile, stats, onAuthChange }) {
       setError(err.message ?? "Something went wrong");
     } finally {
       setBusy(false);
+      resetCaptcha();
     }
   }
 
@@ -326,9 +368,10 @@ function AuthPanel({ profile, stats, onAuthChange }) {
               )}
               <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" style={inputStyle} />
               <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" style={inputStyle} />
+              <div ref={turnstileRef} />
               {error && <div className="text-xs" style={{ color: C.rust }}>{error}</div>}
-              <button onClick={handleSubmit} disabled={busy || (authMode === "signup" && !tosAgreed)} className="fs-btn py-1.5 text-xs font-medium"
-                style={{ background: C.olive, color: C.bg, ...headFont, opacity: (authMode === "signup" && !tosAgreed) ? 0.5 : 1 }}>
+              <button onClick={handleSubmit} disabled={busy || (authMode === "signup" && !tosAgreed) || !captchaToken} className="fs-btn py-1.5 text-xs font-medium"
+                style={{ background: C.olive, color: C.bg, ...headFont, opacity: (busy || (authMode === "signup" && !tosAgreed) || !captchaToken) ? 0.5 : 1 }}>
                 {busy ? "…" : authMode === "signup" ? "Create account" : "Sign in"}
               </button>
             </>

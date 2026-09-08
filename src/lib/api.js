@@ -117,18 +117,18 @@ export async function fetchModeratorQueue() {
 // Auth helpers
 // ---------------------------------------------------------------------------
 
-export async function signUp(email, password, username) {
+export async function signUp(email, password, username, captchaToken) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { username } },
+    options: { data: { username }, captchaToken },
   });
   if (error) throw error;
   return data;
 }
 
-export async function signIn(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+export async function signIn(email, password, captchaToken) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password, options: { captchaToken } });
   if (error) throw error;
   return data;
 }
