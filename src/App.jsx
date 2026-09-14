@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Search, X, ArrowUpDown, Crosshair, Scale, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, CircleDashed, ExternalLink, Flag, Gavel, Plus } from "lucide-react";
-import { fetchCatalog, submitFieldValue, signUp, signIn, signOut, getCurrentProfile, fetchAcceptanceStats } from "./lib/api";
+import { Search, X, ArrowUpDown, Crosshair, Scale, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, CircleDashed, ExternalLink, Flag, Gavel, Plus, Image as ImageIcon, Upload } from "lucide-react";
+import { fetchCatalog, submitFieldValue, signUp, signIn, signOut, getCurrentProfile, fetchAcceptanceStats, fetchProductImages, uploadProductImage, reportImage, createProduct } from "./lib/api";
 import { supabase } from "./lib/supabaseClient";
 
 // ---------------------------------------------------------------------------
@@ -68,12 +68,15 @@ function analyzeField(field) {
 
 const FIELD_DEFS = {
   Firearms: [
+    { key: "firearm_type", label: "Firearm Type", options: ["Full-auto", "Semi-auto", "Bolt action", "Single shot", "Lever action", "Revolver", "Pump action"] },
     { key: "caliber", label: "Caliber" },
-    { key: "action", label: "Action" },
-    { key: "barrel", label: "Barrel (in)", numeric: true, lowerBetter: false },
+    { key: "barrel", label: "Barrel Length (in)", numeric: true, lowerBetter: false },
     { key: "weight", label: "Weight (lb)", numeric: true, lowerBetter: true },
+    { key: "length", label: "Firearm Length (in)", numeric: true, lowerBetter: false },
+    { key: "muzzle_thread", label: "Muzzle Thread" },
     { key: "capacity", label: "Capacity", numeric: true, lowerBetter: false },
-    { key: "price", label: "Price", numeric: true, lowerBetter: true, isPrice: true },
+    { key: "sights", label: "Sights" },
+    { key: "msrp", label: "MSRP", numeric: true, lowerBetter: true, isPrice: true },
   ],
   Optics: [
     { key: "mag", label: "Magnification" },
@@ -109,7 +112,7 @@ function StatusBadge({ status, manufacturerAssisted }) {
 // ---------------------------------------------------------------------------
 // Moderator resolution mini-form
 // ---------------------------------------------------------------------------
-function ResolveForm({ entries, profile, onSubmit }) {
+function ResolveForm({ entries, fieldOptions, profile, onSubmit }) {
   const [value, setValue] = useState(entries[0]?.value ?? "");
   const [customValue, setCustomValue] = useState("");
   const [useCustom, setUseCustom] = useState(false);
@@ -151,7 +154,16 @@ function ResolveForm({ entries, profile, onSubmit }) {
           {entries.map((en, i) => <option key={i} value={en.value}>{en.value}</option>)}
           <option value="__custom">Different value…</option>
         </select>
-        {useCustom && <input value={customValue} onChange={(e) => setCustomValue(e.target.value)} placeholder="New value" style={{ ...inputStyle, width: "110px" }} />}
+        {useCustom && (
+          fieldOptions ? (
+            <select value={customValue} onChange={(e) => setCustomValue(e.target.value)} style={inputStyle}>
+              <option value="">Choose…</option>
+              {fieldOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          ) : (
+            <input value={customValue} onChange={(e) => setCustomValue(e.target.value)} placeholder="New value" style={{ ...inputStyle, width: "110px" }} />
+          )
+        )}
         <select value={sourceType} onChange={(e) => setSourceType(e.target.value)} style={inputStyle}>
           <option value="independent">Independent source</option>
           <option value="manufacturer">Manufacturer spec sheet</option>
@@ -176,7 +188,7 @@ function ResolveForm({ entries, profile, onSubmit }) {
 // isn't currently disputed. No manufacturer-source option here on purpose:
 // that stays restricted to ResolveForm, for genuine disputes only.
 // ---------------------------------------------------------------------------
-function AddSourceForm({ fieldKey, currentValue, hasExistingValue, profile, onSubmit }) {
+function AddSourceForm({ fieldKey, fieldOptions, currentValue, hasExistingValue, profile, onSubmit }) {
   const [open, setOpen] = useState(false);
   const [useCustom, setUseCustom] = useState(!hasExistingValue);
   const [customValue, setCustomValue] = useState("");
@@ -225,13 +237,194 @@ function AddSourceForm({ fieldKey, currentValue, hasExistingValue, profile, onSu
           </label>
         </div>
       )}
-      {useCustom && <input value={customValue} onChange={(e) => setCustomValue(e.target.value)} placeholder="Value" style={inputStyle} />}
+      {useCustom && (
+        fieldOptions ? (
+          <select value={customValue} onChange={(e) => setCustomValue(e.target.value)} style={inputStyle}>
+            <option value="">Choose…</option>
+            {fieldOptions.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+        ) : (
+          <input value={customValue} onChange={(e) => setCustomValue(e.target.value)} placeholder="Value" style={inputStyle} />
+        )
+      )}
       <input value={sourceLabel} onChange={(e) => setSourceLabel(e.target.value)} placeholder="Source (e.g. owner's manual, PDF)" style={inputStyle} />
       {error && <div className="text-xs" style={{ color: C.rust }}>{error}</div>}
       <div className="flex gap-2">
         <button onClick={submit} disabled={busy} className="fs-btn px-2 py-1 text-xs font-medium" style={{ background: C.olive, color: C.bg, ...headFont }}>{busy ? "…" : "Submit"}</button>
         <button onClick={() => setOpen(false)} className="fs-btn px-2 py-1 text-xs" style={{ color: C.textFaint }}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ImageGallery — multi-photo gallery per product. No technical way to prove
+// a photo is genuinely the uploader's own; enforced by a required
+// attestation checkbox plus community flagging (2 independent reports
+// auto-hides an image pending moderator review).
+// ---------------------------------------------------------------------------
+function ImageGallery({ productId, profile }) {
+  const [images, setImages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showUpload, setShowUpload] = useState(false);
+  const [file, setFile] = useState(null);
+  const [caption, setCaption] = useState("");
+  const [attested, setAttested] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [reportedIds, setReportedIds] = useState(new Set());
+
+  async function load() {
+    setLoading(true);
+    try {
+      setImages(await fetchProductImages(productId));
+    } catch {
+      setImages([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, [productId]);
+
+  async function submitUpload() {
+    if (!file || !attested) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await uploadProductImage(productId, file, caption.trim() || null);
+      setFile(null); setCaption(""); setAttested(false); setShowUpload(false);
+      await load();
+    } catch (err) {
+      setError(err.message ?? "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReport(imageId) {
+    try {
+      await reportImage(imageId, "Reported as possibly not the uploader's own photo");
+      setReportedIds((prev) => new Set(prev).add(imageId));
+    } catch (err) {
+      setError(err.message ?? "Failed to report");
+    }
+  }
+
+  const inputStyle = { ...bodyFont, background: C.bg, border: `1px solid ${C.line}`, color: C.text, padding: "5px 8px", fontSize: "0.78rem", outline: "none" };
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-1.5 mb-2">
+        <ImageIcon size={13} color={C.textFaint} />
+        <span style={{ color: C.textFaint, ...monoFont }} className="text-xs">Photos {images.length > 0 && `(${images.length})`}</span>
+      </div>
+
+      {loading ? (
+        <div className="text-xs" style={{ color: C.textFaint }}>Loading…</div>
+      ) : (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {images.map((img) => (
+            <div key={img.id} className="relative" style={{ width: 90 }}>
+              <img src={img.url} alt={img.caption || "product photo"} style={{ width: 90, height: 90, objectFit: "cover", border: `1px solid ${C.line}` }} />
+              <div className="text-xs mt-0.5" style={{ color: C.textFaint }}>@{img.uploader}</div>
+              <button
+                onClick={() => handleReport(img.id)}
+                disabled={reportedIds.has(img.id)}
+                className="fs-btn text-xs flex items-center gap-0.5 mt-0.5"
+                style={{ color: reportedIds.has(img.id) ? C.textFaint : C.rust }}
+              >
+                <Flag size={9} /> {reportedIds.has(img.id) ? "Reported" : "Report"}
+              </button>
+            </div>
+          ))}
+          {images.length === 0 && <div className="text-xs" style={{ color: C.textFaint }}>No photos yet.</div>}
+        </div>
+      )}
+
+      {!profile ? (
+        <div className="text-xs" style={{ color: C.textFaint }}>Sign in to add a photo.</div>
+      ) : !showUpload ? (
+        <button onClick={() => setShowUpload(true)} className="fs-btn text-xs flex items-center gap-1" style={{ color: C.olive }}>
+          <Upload size={11} /> Add a photo
+        </button>
+      ) : (
+        <div className="p-2 flex flex-col gap-1.5" style={{ background: C.panel, border: `1px solid ${C.line}`, maxWidth: 280 }}>
+          <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} style={{ fontSize: "0.75rem", color: C.textDim }} />
+          <input value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Caption (optional)" style={inputStyle} />
+          <label className="flex items-start gap-1.5 text-xs" style={{ color: C.textDim }}>
+            <input type="checkbox" checked={attested} onChange={(e) => setAttested(e.target.checked)} style={{ marginTop: "2px" }} />
+            <span>This is a photo I personally took of this item — not downloaded from another website.</span>
+          </label>
+          {error && <div className="text-xs" style={{ color: C.rust }}>{error}</div>}
+          <div className="flex gap-2">
+            <button onClick={submitUpload} disabled={busy || !file || !attested} className="fs-btn px-2 py-1 text-xs font-medium"
+              style={{ background: C.olive, color: C.bg, ...headFont, opacity: (busy || !file || !attested) ? 0.5 : 1 }}>
+              {busy ? "…" : "Upload"}
+            </button>
+            <button onClick={() => setShowUpload(false)} className="fs-btn px-2 py-1 text-xs" style={{ color: C.textFaint }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AddProductForm — create a brand-new product in the catalog. Category is
+// implied by whichever tab is currently open. Subject to the same daily
+// rate limit as spec submissions (reusing get_daily_limit tier-side).
+// ---------------------------------------------------------------------------
+function AddProductForm({ category, categoryLabel, profile, onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [manufacturer, setManufacturer] = useState("");
+  const [model, setModel] = useState("");
+  const [type, setType] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const inputStyle = { ...bodyFont, background: C.bg, border: `1px solid ${C.line}`, color: C.text, padding: "6px 8px", fontSize: "0.8rem", outline: "none" };
+
+  async function submit() {
+    if (!manufacturer.trim() || !model.trim() || !type.trim()) { setError("All three fields are required"); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      await onCreated({ category, manufacturer: manufacturer.trim(), model: model.trim(), type: type.trim() });
+      setManufacturer(""); setModel(""); setType(""); setOpen(false);
+    } catch (err) {
+      setError(err.message ?? "Failed to create product");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!profile) {
+    return <span className="text-xs" style={{ color: C.textFaint }}>Sign in to add a new {categoryLabel.toLowerCase()}.</span>;
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="fs-btn flex items-center gap-1 px-3 py-2 text-sm" style={{ background: C.panel, border: `1px solid ${C.olive}`, color: C.olive }}>
+        <Plus size={13} /> Add a {categoryLabel.toLowerCase()} not listed here
+      </button>
+    );
+  }
+
+  return (
+    <div className="p-3 flex flex-col gap-2" style={{ background: C.panel, border: `1px solid ${C.line}`, maxWidth: 340 }}>
+      <div style={{ ...headFont }} className="text-sm font-medium">New {categoryLabel.toLowerCase()}</div>
+      <input value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} placeholder="Manufacturer (e.g. Ruger)" style={inputStyle} />
+      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model (e.g. American Gen II)" style={inputStyle} />
+      <input value={type} onChange={(e) => setType(e.target.value)} placeholder={category === "firearm" ? "Type (e.g. Rifle, Pistol)" : "Type (e.g. Rifle Scope, Red Dot)"} style={inputStyle} />
+      {error && <div className="text-xs" style={{ color: C.rust }}>{error}</div>}
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={busy} className="fs-btn px-3 py-1.5 text-xs font-medium" style={{ background: C.olive, color: C.bg, ...headFont }}>
+          {busy ? "…" : "Create"}
+        </button>
+        <button onClick={() => setOpen(false)} className="fs-btn px-3 py-1.5 text-xs" style={{ color: C.textFaint }}>Cancel</button>
+      </div>
+      <div className="text-xs" style={{ color: C.textFaint }}>You'll be able to add sourced specs and photos to it right after.</div>
     </div>
   );
 }
@@ -449,7 +642,7 @@ export default function FieldSheet() {
   const [maxPrice, setMaxPrice] = useState(2500);
   const [numericFilters, setNumericFilters] = useState({});
   const [showFilters, setShowFilters] = useState(false);
-  const [sortKey, setSortKey] = useState("price");
+  const [sortKey, setSortKey] = useState("msrp"); // matches Firearms tab, the default tab
   const [sortDir, setSortDir] = useState("asc");
   const [selected, setSelected] = useState({ Firearms: new Set(), Optics: new Set() });
   const [expanded, setExpanded] = useState(null);
@@ -502,6 +695,11 @@ export default function FieldSheet() {
     await refreshProfile(); // this write may have just changed our own tier
   }
 
+  async function handleCreateProduct({ category, manufacturer, model, type }) {
+    await createProduct({ category, manufacturer, model, type });
+    await loadCatalog();
+  }
+
   const data = catalog[tab];
   const fieldDefs = FIELD_DEFS[tab];
   const mfgOptions = useMemo(() => uniq(data, "mfg"), [data]);
@@ -515,9 +713,12 @@ export default function FieldSheet() {
     });
   }, [data, fieldDefs]);
 
-  // Numeric fields (besides price, which has its own always-visible slider) get
-  // a dynamic "max" filter, ranged to whatever's actually in the current data.
-  const numericFieldDefs = fieldDefs.filter((fd) => fd.numeric && fd.key !== "price");
+  // Numeric fields (besides the price-like field, which has its own always-visible
+  // slider) get a dynamic "max" filter, ranged to whatever's actually in the data.
+  // The price-like field's key varies by tab (Firearms uses "msrp", Optics uses "price"),
+  // so it's found by its isPrice flag rather than assumed.
+  const priceFieldKey = fieldDefs.find((fd) => fd.isPrice)?.key;
+  const numericFieldDefs = fieldDefs.filter((fd) => fd.numeric && fd.key !== priceFieldKey);
   const fieldRanges = useMemo(() => {
     const ranges = {};
     numericFieldDefs.forEach((fd) => {
@@ -556,7 +757,7 @@ export default function FieldSheet() {
       const matchesQuery = !q || r.mfg.toLowerCase().includes(q) || r.model.toLowerCase().includes(q);
       const matchesMfg = mfgFilter.size === 0 || mfgFilter.has(r.mfg);
       const matchesType = typeFilter.size === 0 || typeFilter.has(r.type);
-      const priceValue = r.analysis.price?.primary?.value;
+      const priceValue = r.analysis[priceFieldKey]?.primary?.value;
       const matchesPrice = priceValue == null || priceValue <= maxPrice;
       const matchesNumeric = numericFieldDefs.every((fd) => {
         const v = r.analysis[fd.key]?.primary?.value;
@@ -589,7 +790,10 @@ export default function FieldSheet() {
     });
   }
   function onSort(key) { if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } }
-  function switchTab(t) { setTab(t); setQuery(""); setMfgFilter(new Set()); setTypeFilter(new Set()); setMaxPrice(2500); setNumericFilters({}); setSortKey("price"); setSortDir("asc"); setShowFilters(false); setExpanded(null); }
+  function switchTab(t) {
+    const defaultSort = FIELD_DEFS[t].find((fd) => fd.isPrice)?.key ?? FIELD_DEFS[t][0].key;
+    setTab(t); setQuery(""); setMfgFilter(new Set()); setTypeFilter(new Set()); setMaxPrice(2500); setNumericFilters({}); setSortKey(defaultSort); setSortDir("asc"); setShowFilters(false); setExpanded(null);
+  }
   const bestFor = (fieldDef) => {
     if (!fieldDef.numeric || compareItems.length < 2) return null;
     const vals = compareItems.map((c) => c.analysis[fieldDef.key]?.primary?.value).filter((v) => typeof v === "number");
@@ -710,7 +914,7 @@ export default function FieldSheet() {
                       </div>
                     ))}
                   </div>
-                  <ResolveForm entries={analysis.entries} profile={profile} onSubmit={(submission) => addSubmission(tabName, item.id, fd.key, submission)} />
+                  <ResolveForm entries={analysis.entries} fieldOptions={fd.options} profile={profile} onSubmit={(submission) => addSubmission(tabName, item.id, fd.key, submission)} />
                 </div>
               ))}
             </div>
@@ -770,6 +974,7 @@ export default function FieldSheet() {
                 </div>
               </div>
             )}
+            <AddProductForm category={tab === "Firearms" ? "firearm" : "optic"} categoryLabel={tab === "Firearms" ? "Firearm" : "Optic"} profile={profile} onCreated={handleCreateProduct} />
           </div>
 
           {/* Compare tray */}
@@ -893,6 +1098,7 @@ export default function FieldSheet() {
                           <td colSpan={fieldDefs.length + 4} className="pb-4 pt-1">
                             <div className="px-3 py-3" style={{ background: C.panel, border: `1px solid ${C.line}` }}>
                               <div style={{ ...headFont }} className="text-sm font-medium mb-2">{item.mfg} {item.model} — field sources</div>
+                              <ImageGallery productId={item.id} profile={profile} />
                               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
                                 {fieldDefs.map((fd) => {
                                   const a = item.analysis[fd.key];
@@ -905,7 +1111,7 @@ export default function FieldSheet() {
                                       {a.status === "empty" ? (
                                         <div className="flex flex-col gap-1">
                                           <div className="text-xs" style={{ color: C.textFaint }}>No submissions yet — be the first to add one.</div>
-                                          <AddSourceForm fieldKey={fd.key} currentValue={null} hasExistingValue={false} profile={profile}
+                                          <AddSourceForm fieldKey={fd.key} fieldOptions={fd.options} currentValue={null} hasExistingValue={false} profile={profile}
                                             onSubmit={(submission) => addSubmission(tab, item.id, fd.key, submission)} />
                                         </div>
                                       ) : a.status === "disputed" ? (
@@ -942,7 +1148,7 @@ export default function FieldSheet() {
                                               </div>
                                             ))}
                                           </div>
-                                          <AddSourceForm fieldKey={fd.key} currentValue={a.primary.value} hasExistingValue={true} profile={profile}
+                                          <AddSourceForm fieldKey={fd.key} fieldOptions={fd.options} currentValue={a.primary.value} hasExistingValue={true} profile={profile}
                                             onSubmit={(submission) => addSubmission(tab, item.id, fd.key, submission)} />
                                         </>
                                       )}

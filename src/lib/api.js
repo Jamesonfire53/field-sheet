@@ -107,10 +107,78 @@ export async function submitFieldValue({ productId, fieldKey, value, sourceLabel
 // Moderator queue — will throw if the current user isn't tier 'moderator'
 // ---------------------------------------------------------------------------
 
+export async function createProduct({ category, manufacturer, model, type }) {
+  const { data, error } = await supabase.rpc("create_product", {
+    p_category: category,
+    p_manufacturer: manufacturer,
+    p_model: model,
+    p_type: type,
+  });
+  if (error) throw error;
+  return data;
+}
+
 export async function fetchModeratorQueue() {
   const { data, error } = await supabase.rpc("get_moderator_queue");
   if (error) throw error;
   return data;
+}
+
+// ---------------------------------------------------------------------------
+// Images
+// ---------------------------------------------------------------------------
+
+export async function fetchProductImages(productId) {
+  const { data, error } = await supabase.rpc("get_product_images", { p_product_id: productId });
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    ...row,
+    url: supabase.storage.from("product-images").getPublicUrl(row.storage_path).data.publicUrl,
+  }));
+}
+
+export async function uploadProductImage(productId, file, caption) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
+
+  const ext = file.name.split(".").pop();
+  const path = `${productId}/${user.id}/${Date.now()}.${ext}`;
+
+  const { error: uploadError } = await supabase.storage.from("product-images").upload(path, file);
+  if (uploadError) throw uploadError;
+
+  const { data, error } = await supabase.rpc("add_product_image", {
+    p_product_id: productId,
+    p_storage_path: path,
+    p_caption: caption ?? null,
+  });
+  if (error) {
+    // Clean up the uploaded file if the database insert (e.g. rate limit) rejected it
+    await supabase.storage.from("product-images").remove([path]);
+    throw error;
+  }
+  return data;
+}
+
+export async function reportImage(imageId, reason) {
+  const { error } = await supabase.rpc("report_image", { p_image_id: imageId, p_reason: reason ?? null });
+  if (error) throw error;
+}
+
+export async function fetchHiddenImagesQueue() {
+  const { data, error } = await supabase.rpc("get_hidden_images_queue");
+  if (error) throw error;
+  return data;
+}
+
+export async function removeImage(imageId) {
+  const { error } = await supabase.rpc("remove_image", { p_image_id: imageId });
+  if (error) throw error;
+}
+
+export async function restoreImage(imageId) {
+  const { error } = await supabase.rpc("restore_image", { p_image_id: imageId });
+  if (error) throw error;
 }
 
 // ---------------------------------------------------------------------------
