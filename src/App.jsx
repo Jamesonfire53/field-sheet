@@ -872,10 +872,6 @@ export default function FieldSheet() {
         <div className="px-5 sm:px-8 py-16 text-center" style={{ color: C.textFaint }}>Loading catalog…</div>
       ) : loadError ? (
         <div className="px-5 sm:px-8 py-16 text-center" style={{ color: C.rust }}>Couldn't load the catalog: {loadError}</div>
-      ) : data.length === 0 && mode === "catalog" ? (
-        <div className="px-5 sm:px-8 py-16 text-center" style={{ color: C.textFaint }}>
-          No {tab.toLowerCase()} in the database yet. Run the seed script, or add a product.
-        </div>
       ) : mode === "moderator" ? (
         <div className="px-5 sm:px-8 py-6">
           <div className="flex items-center gap-2 mb-1">
@@ -1035,6 +1031,11 @@ export default function FieldSheet() {
           )}
 
           {/* Results table */}
+          {data.length === 0 ? (
+            <div className="px-5 sm:px-8 py-16 text-center" style={{ color: C.textFaint }}>
+              No {tab.toLowerCase()} in the database yet. Use the button above to add the first one.
+            </div>
+          ) : (
           <div className="px-5 sm:px-8 py-5 overflow-x-auto">
             <table style={{ borderCollapse: "collapse" }} className="w-full text-sm">
               <thead>
@@ -1167,6 +1168,7 @@ export default function FieldSheet() {
             </table>
             <p style={{ color: C.textFaint }} className="text-xs mt-3">Click the arrow to see every submission behind a field, including disputed values. Click a row to add it to comparison (up to 4).</p>
           </div>
+          )}
         </>
       )}
       <div className="px-5 sm:px-8 py-4 flex gap-4 text-xs" style={{ borderTop: `1px solid ${C.lineFaint}`, color: C.textFaint }}>
