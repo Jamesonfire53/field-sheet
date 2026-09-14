@@ -88,6 +88,8 @@ const FIELD_DEFS = {
   ],
 };
 
+const FIREARM_CATEGORIES = ["Rifle", "Pistol", "Revolver", "Shotgun", "AR Pistol", "Short Barreled Rifle"];
+
 function uniq(arr, key) {
   return [...new Set(arr.map((x) => x[key]))].sort();
 }
@@ -416,7 +418,14 @@ function AddProductForm({ category, categoryLabel, profile, onCreated }) {
       <div style={{ ...headFont }} className="text-sm font-medium">New {categoryLabel.toLowerCase()}</div>
       <input value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} placeholder="Manufacturer (e.g. Ruger)" style={inputStyle} />
       <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model (e.g. American Gen II)" style={inputStyle} />
-      <input value={type} onChange={(e) => setType(e.target.value)} placeholder={category === "firearm" ? "Type (e.g. Rifle, Pistol)" : "Type (e.g. Rifle Scope, Red Dot)"} style={inputStyle} />
+      {category === "firearm" ? (
+        <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle}>
+          <option value="">Category…</option>
+          {FIREARM_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      ) : (
+        <input value={type} onChange={(e) => setType(e.target.value)} placeholder="Type (e.g. Rifle Scope, Red Dot)" style={inputStyle} />
+      )}
       {error && <div className="text-xs" style={{ color: C.rust }}>{error}</div>}
       <div className="flex gap-2">
         <button onClick={submit} disabled={busy} className="fs-btn px-3 py-1.5 text-xs font-medium" style={{ background: C.olive, color: C.bg, ...headFont }}>
